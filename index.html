@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="ko" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Smart PDF Reader PWA</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+    <style>
+        /* 터치 조작 최적화 */
+        body {
+            touch-action: pan-x pan-y;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+        .canvas-container {
+            position: relative;
+            transform-origin: top left;
+            transition: transform 0.1s ease-out;
+        }
+        /* 스크롤바 숨기기 (모바일 뷰 최적화) */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 h-full flex flex-col overflow-hidden font-sans transition-colors duration-200">
+
+    <!-- PWA 설치 안내 배너 -->
+    <div id="pwa-install-banner" class="hidden bg-primary-600 text-white p-3 flex justify-between items-center z-50 animate-bounce">
+        <div class="flex items-center space-x-2">
+            <i data-lucide="download" class="w-5 h-5"></i>
+            <span class="text-xs sm:text-sm font-medium">홈 화면에 PDF 리더를 추가하여 앱처럼 사용하세요!</span>
+        </div>
+        <div class="flex space-x-2">
+            <button id="pwa-install-btn" class="bg-white text-primary-600 px-3 py-1 rounded text-xs font-bold shadow-sm">설치</button>
+            <button id="pwa-close-banner" class="text-white hover:text-slate-200"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+    </div>
+
+    <!-- 상단 툴바 (헤더) -->
+    <header class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between shadow-sm z-30">
+        <div class="flex items-center space-x-2">
+            <button id="menu-btn" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition">
+                <i data-lucide="menu" class="w-6 h-6"></i>
+            </button>
+            <h1 id="app-title" class="text-base sm:text-lg font-bold tracking-tight truncate max-w-[150px] sm:max-w-[300px]">Smart PDF Reader</h1>
+        </div>
+        
+        <!-- 중앙 페이지 제어 장치 (모바일에서는 간소화) -->
+        <div class="hidden sm:flex items-center space-x-2 bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
+            <button id="prev-page-btn" class="p-1.5 hover:bg-white dark:hover:bg-slate-700 rounded-md transition">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </button>
+            <div class="text-sm font-medium px-2">
+                <span id="current-page-display">0</span> / <span id="total-pages-display">0</span>
+            </div>
+            <button id="next-page-btn" class="p-1.5 hover:bg-white dark:hover:bg-slate-700 rounded-md transition">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <div class="flex items-center space-x-1 sm:space-x-2">
+            <!-- 검색 버튼 -->
+            <button id="toggle-search-btn" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition" title="텍스트 검색">
+                <i data-lucide="search" class="w-5 h-5"></i>
+            </button>
+            <!-- 테마 전환 버튼 -->
+            <button id="theme-toggle-btn" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition" title="다크 모드 전환">
+                <i data-lucide="moon" class="w-5 h-5 dark:hidden"></i>
+                <i data-lucide="sun" class="w-5 h-5 hidden dark:block"></i>
+            </button>
+            <!-- 파일 열기 버튼 -->
+            <label class="cursor-pointer bg-primary-600 hover:bg-primary-700 text-white p-2 rounded-lg transition flex items-center justify-center shadow-md">
+                <i data-lucide="file-plus-2" class="w-5 h-5"></i>
+                <span class="hidden md:inline ml-2 text-sm font-medium">파일 열기</span>
+                <input type="file" id="file-input" accept=".pdf" class="hidden">
+            </label>
+        </div>
+    </header>
+
+    <!-- 검색 바 (토글 가능) -->
+    <div id="search-bar" class="hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-2 flex items-center justify-between z-20 transition-all">
+        <div class="flex items-center space-x-2 w-full max-w-md">
+            <input type="text" id="search-input" placeholder="검색할 텍스트를 입력하세요..." class="w-full px-3 py-1.5 text-sm bg-slate-100 dark:bg-slate-800 rounded-lg border border-transparent focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none">
+            <button id="search-prev-btn" class="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+            <button id="search-next-btn" class="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+            <span id="search-count" class="text-xs text-slate-500 whitespace-nowrap">0/0</span>
+        </div>
+    </div>
+
+    <!-- 메인 레이아웃 구역 -->
+    <main class="flex-1 flex overflow-hidden relative">
+
+        <!-- 왼쪽 사이드바 (최근 파일 및 북마크) -->
+        <aside id="sidebar" class="absolute lg:relative top-0 left-0 h-full w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 z-40 transform -translate-x-full lg:translate-x-0 transition-transform duration-300 flex flex-col">
+            <!-- 사이드바 헤더 -->
+            <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
+                <h2 class="font-bold text-base flex items-center"><i data-lucide="folder" class="w-5 h-5 mr-2 text-primary-500"></i> 라이브러리</h2>
+                <button id="close-sidebar-btn" class="lg:hidden p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"><i data-lucide="chevrons-left" class="w-5 h-5"></i></button>
+            </div>
+            
+            <!-- 내비게이션 탭 -->
+            <div class="flex border-b border-slate-200 dark:border-slate-800 text-sm">
+                <button id="tab-recent" class="flex-1 py-2.5 text-center font-semibold border-b-2 border-primary-500 text-primary-500">최근 파일</button>
+                <button id="tab-bookmarks" class="flex-1 py-2.5 text-center font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200">북마크</button>
+            </div>
+
+            <!-- 탭 콘텐츠 구역 -->
+            <div class="flex-1 overflow-y-auto p-4 no-scrollbar">
+                <!-- 최근 파일 목록 -->
+                <div id="recent-list-container" class="space-y-2">
+                    <p class="text-xs text-slate-400 dark:text-slate-500">최근에 업로드된 문서가 여기에 표시됩니다.</p>
+                    <ul id="recent-files-list" class="space-y-1 mt-2">
+                        <!-- 동적 추가 예정 -->
+                    </ul>
+                </div>
+                <!-- 북마크 목록 (기본 숨김) -->
+                <div id="bookmarks-container" class="hidden space-y-2">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs text-slate-400 dark:text-slate-500">현재 페이지를 북마크에 추가하세요.</span>
+                        <button id="add-bookmark-btn" class="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-xs font-semibold rounded hover:bg-primary-50 dark:hover:bg-primary-950 hover:text-primary-500 flex items-center"><i data-lucide="plus" class="w-3.5 h-3.5 mr-1"></i> 추가</button>
+                    </div>
+                    <ul id="bookmarks-list" class="space-y-1">
+                        <!-- 동적 추가 예정 -->
+                    </ul>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 사이드바 오버레이 (모바일용) -->
+        <div id="sidebar-overlay" class="hidden absolute inset-0 bg-black/50 z-30 lg:hidden"></div>
+
+        <!-- 중앙 PDF 뷰어 영역 -->
+        <section id="viewer-section" class="flex-1 flex flex-col bg-slate-200 dark:bg-slate-950 overflow-auto relative items-center justify-start py-4 no-scrollbar">
+            <!-- 초기 홈화면 환영 카드 -->
+            <div id="welcome-card" class="m-auto max-w-md w-11/12 p-6 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 text-center space-y-4">
+                <div class="w-16 h-16 bg-primary-100 dark:bg-primary-950/50 rounded-2xl flex items-center justify-center mx-auto text-primary-500">
+                    <i data-lucide="file-text" class="w-10 h-10"></i>
+                </div>
+                <div>
+                    <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100">오프라인 스마트 PDF 리더</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">안드로이드 기기에 최적화된 고속 뷰어입니다. 파일을 업로드하여 읽기를 시작해 보세요.</p>
+                </div>
+                
+                <label class="block w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 text-white rounded-xl font-semibold shadow-md transition cursor-pointer">
+                    <i data-lucide="file-search-2" class="inline w-5 h-5 mr-2"></i>PDF 파일 선택하기
+                    <input type="file" id="welcome-file-input" accept=".pdf" class="hidden">
+                </label>
+                <div class="text-xs text-slate-400">파일은 외부 서버에 저장되지 않고 개인 기기에서 바로 열립니다.</div>
+            </div>
+
+            <!-- PDF 렌더링 캔버스 컨테이너 -->
+            <div id="pdf-container" class="hidden flex flex-col items-center">
+                <div id="canvas-wrapper" class="canvas-container shadow-2xl bg-white rounded-lg overflow-hidden border border-slate-300 dark:border-slate-800">
+                    <canvas id="pdf-canvas"></canvas>
+                </div>
+            </div>
+
+            <!-- 로딩 스피너 -->
+            <div id="loading-spinner" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-900/10 dark:bg-slate-950/40 z-20">
+                <div class="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin"></div>
+                <span class="mt-4 text-sm font-medium text-slate-700 dark:text-slate-200">문서를 로딩 중입니다...</span>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- 모바일 하단 제어 바 (안드로이드 한손 조작 최적화) -->
+    <footer id="mobile-footer" class="hidden bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between z-30 select-none">
+        <button id="footer-prev-btn" class="p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl flex flex-col items-center justify-center text-slate-500 active:scale-95 transition">
+            <i data-lucide="chevron-left-square" class="w-6 h-6"></i>
+            <span class="text-[10px] mt-0.5">이전</span>
+        </button>
+        
+        <div class="flex flex-col items-center justify-center">
+            <span class="text-xs font-semibold text-slate-400">페이지</span>
+            <div class="text-sm font-bold text-primary-600 dark:text-primary-500">
+                <span id="footer-curr-page">0</span> / <span id="footer-total-page">0</span>
+            </div>
+        </div>
+
+        <div class="flex space-x-2">
+            <button id="zoom-out-btn" class="p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl text-slate-500 active:scale-95 transition">
+                <i data-lucide="zoom-out" class="w-6 h-6"></i>
+            </button>
+            <button id="zoom-in-btn" class="p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl text-slate-500 active:scale-95 transition">
+                <i data-lucide="zoom-in" class="w-6 h-6"></i>
+            </button>
+        </div>
+
+        <button id="footer-next-btn" class="p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl flex flex-col items-center justify-center text-slate-500 active:scale-95 transition">
+            <i data-lucide="chevron-right-square" class="w-6 h-6"></i>
+            <span class="text-[10px] mt-0.5">다음</span>
+        </button>
+    </footer>
+
+    <!-- 플로팅 토스트 메시지 -->
+    <div id="toast-message" class="fixed bottom-20 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white px-4 py-2 rounded-full text-xs sm:text-sm font-medium shadow-lg z-50 transition-opacity duration-300 opacity-0 pointer-events-none">
+        메시지 내용
+    </div>
+
+    <!-- PWA 및 핵심 스크립트 기능 처리 -->
+    <script>
+        // Lucide Icons 초기화
+        lucide.createIcons();
+
+        // 상태 데이터 관리
+        const state = {
+            pdfDoc: null,
+            pageNum: 1,
+            numPages: 0,
+            scale: 1.0,
+            currentFileName: '',
+            currentFileData: null, // 최근 파일 조회를 위한 Base64 또는 임시 스토리지 키
+            bookmarks: [],
+            recentFiles: [],
+            isNightMode: false,
+            touchStartX: 0,
+            touchStartY: 0,
+            touchEndX: 0,
+            touchEndY: 0,
+            pinchStartDist: 0,
+            isZooming: false
+        };
+
+        // DOM 요소 캐싱
+        const elements = {
+            fileInput: document.getElementById('file-input'),
+            welcomeFileInput: document.getElementById('welcome-file-input'),
+            canvas: document.getElementById('pdf-canvas'),
+            ctx: document.getElementById('pdf-canvas').getContext('2d'),
+            canvasWrapper: document.getElementById('canvas-wrapper'),
+            pdfContainer: document.getElementById('pdf-container'),
+            welcomeCard: document.getElementById('welcome-card'),
+            loadingSpinner: document.getElementById('loading-spinner'),
+            
+            // 내비게이션 및 디스플레이
+            appTitle: document.getElementById('app-title'),
+            currPageDisp: document.getElementById('current-page-display'),
+            totalPageDisp: document.getElementById('total-pages-display'),
+            footerCurrPage: document.getElementById('footer-curr-page'),
+            footerTotalPage: document.getElementById('footer-total-page'),
+            
+            // 제어 버튼
+            prevBtn: document.getElementById('prev-page-btn'),
+            nextBtn: document.getElementById('next-page-btn'),
+            footerPrevBtn: document.getElementById('footer-prev-btn'),
+            footerNextBtn: document.getElementById('footer-next-btn'),
+            zoomInBtn: document.getElementById('zoom-in-btn'),
+            zoomOutBtn: document.getElementById('zoom-out-btn'),
+            themeToggleBtn: document.getElementById('theme-toggle-btn'),
+            menuBtn: document.getElementById('menu-btn'),
+            closeSidebarBtn: document.getElementById('close-sidebar-btn'),
+            sidebar: document.getElementById('sidebar'),
+            sidebarOverlay: document.getElementById('sidebar-overlay'),
+            mobileFooter: document.getElementById('mobile-footer'),
+            toast: document.getElementById('toast-message'),
+
+            // 사이드바 컨텐츠 및 탭
+            tabRecent: document.getElementById('tab-recent'),
+            tabBookmarks: document.getElementById('tab-bookmarks'),
+            recentListContainer: document.getElementById('recent-list-container'),
+            bookmarksContainer: document.getElementById('bookmarks-container'),
+            recentFilesList: document.getElementById('recent-files-list'),
+            bookmarksList: document.getElementById('bookmarks-list'),
+            addBookmarkBtn: document.getElementById('add-bookmark-btn'),
+
+            // 검색 관련
+            toggleSearchBtn: document.getElementById('toggle-search-btn'),
+            searchBar: document.getElementById('search-bar'),
+            searchInput: document.getElementById('search-input'),
+            searchPrevBtn: document.getElementById('search-prev-btn'),
+            searchNextBtn: document.getElementById('search-next-btn'),
+            searchCount: document.getElementById('search-count')
+        };
+
+        // 1. 토스트 알림 함수
+        function showToast(message) {
+            elements.toast.textContent = message;
+            elements.toast.classList.remove('opacity-0');
+            elements.toast.classList.add('opacity-100');
+            setTimeout(() => {
+                elements.toast.classList.remove('opacity-100');
+                elements.toast.classList.add('opacity-0');
+            }, 2500);
+        }
+
+        // 2. 다크 모드 초기화
+        function initTheme() {
+            if (localStorage.getItem('dark-theme') === 'true' || 
+                (!('dark-theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.classList.add('dark');
+                state.isNightMode = true;
+            } else {
+                document.documentElement.classList.remove('dark');
+                state.isNightMode = false;
+            }
+        }
+        
+        elements.themeToggleBtn.addEventListener('click', () => {
+            document.documentElement.classList.toggle('dark');
+            const isDark = document.documentElement.classList.contains('dark');
+            localStorage.setItem('dark-theme', isDark);
+            state.isNightMode = isDark;
+            showToast(isDark ? "다크 모드가 활성화되었습니다." : "라이트 모드가 활성화되었습니다.");
+            if(state.pdfDoc) renderPage(state.pageNum);
+        });
+
+        // 3. 로컬 데이터 로드 및 저장 (북마크 / 최근 파일)
+        function loadStorageData() {
+            try {
+                state.bookmarks = JSON.parse(localStorage.getItem('pdf_bookmarks') || '[]');
+                state.recentFiles = JSON.parse(localStorage.getItem('pdf_recent_files') || '[]');
+                renderBookmarks();
+                renderRecentFiles();
+            } catch(e) {
+                console.error("저장소 데이터를 가져오는데 실패했습니다.", e);
+            }
+        }
+
+        function saveBookmarks() {
+            localStorage.setItem('pdf_bookmarks', JSON.stringify(state.bookmarks));
+            renderBookmarks();
+        }
+
+        function saveRecentFiles() {
+            localStorage.setItem('pdf_recent_files', JSON.stringify(state.recentFiles));
+            renderRecentFiles();
+        }
+
+        // 4. 북마크 렌더링 및 로직
+        function renderBookmarks() {
+            elements.bookmarksList.innerHTML = '';
+            const currentFileBookmarks = state.bookmarks.filter(b => b.fileName === state.currentFileName);
+            
+            if (currentFileBookmarks.length === 0) {
+                elements.bookmarksList.innerHTML = `<li class="text-xs text-slate-400 py-2 text-center">북마크가 없습니다.</li>`;
+                return;
+            }
+
+            currentFileBookmarks.forEach(bookmark => {
+                const li = document.createElement('li');
+                li.className = "flex items-center justify-between p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-sm transition";
+                li.innerHTML = `
+                    <button class="flex-1 text-left font-medium text-slate-700 dark:text-slate-300">
+                        <i data-lucide="bookmark" class="inline w-3.5 h-3.5 mr-1 text-primary-500 fill-primary-500"></i> ${bookmark.page} 페이지
+                    </button>
+                    <button class="delete-btn text-slate-400 hover:text-red-500 p-1"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                `;
+
+                // 이동 클릭 이벤트
+                li.querySelector('button').addEventListener('click', () => {
+                    goToPage(bookmark.page);
+                    if (window.innerWidth < 1024) toggleSidebar(false); // 모바일에서 닫기
+                });
+
+                // 삭제 클릭 이벤트
+                li.querySelector('.delete-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    state.bookmarks = state.bookmarks.filter(b => !(b.fileName === bookmark.fileName && b.page === bookmark.page));
+                    saveBookmarks();
+                    showToast("북마크가 삭제되었습니다.");
+                });
+
+                elements.bookmarksList.appendChild(li);
+            });
+            lucide.createIcons();
+        }
+
+        elements.addBookmarkBtn.addEventListener('click', () => {
+            if (!state.pdfDoc) {
+                showToast("선택된 문서가 없습니다.");
+                return;
+            }
+            const exists = state.bookmarks.some(b => b.fileName === state.currentFileName && b.page === state.pageNum);
+            if (exists) {
+                showToast("이미 북마크에 등록된 페이지입니다.");
+                return;
+            }
+            state.bookmarks.push({
+                fileName: state.currentFileName,
+                page: state.pageNum,
+                addedAt: new Date().getTime()
+            });
+            saveBookmarks();
+            showToast(`${state.pageNum} 페이지가 북마크에 추가되었습니다.`);
+        });
+
+        // 5. 최근 파일 관리 및 렌더링
+        function renderRecentFiles() {
+            elements.recentFilesList.innerHTML = '';
+            if (state.recentFiles.length === 0) {
+                elements.recentFilesList.innerHTML = `<li class="text-xs text-slate-400 py-2 text-center">최근 문서 기록이 비어있습니다.</li>`;
+                return;
+            }
+
+            state.recentFiles.forEach(file => {
+                const li = document.createElement('li');
+                li.className = "group flex items-center justify-between p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-sm transition";
+                li.innerHTML = `
+                    <button class="flex-1 text-left truncate font-medium text-slate-700 dark:text-slate-300 pr-2">
+                        <i data-lucide="file-text" class="inline w-4 h-4 mr-1.5 text-slate-400"></i> ${file.name}
+                    </button>
+                    <button class="remove-recent-btn text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 p-1"><i data-lucide="x" class="w-4 h-4"></i></button>
+                `;
+
+                // 최근 문서 클릭 시 다시 열기 기능 제공 (안드로이드에서는 File System API 및 Base64를 제한적으로 사용)
+                li.querySelector('button').addEventListener('click', () => {
+                    showToast("이전에 등록한 문서를 다시 업로드해 주세요.");
+                });
+
+                li.querySelector('.remove-recent-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    state.recentFiles = state.recentFiles.filter(rf => rf.name !== file.name);
+                    saveRecentFiles();
+                });
+
+                elements.recentFilesList.appendChild(li);
+            });
+            lucide.createIcons();
+        }
+
+        function addRecentFile(name) {
+            state.recentFiles = state.recentFiles.filter(rf => rf.name !== name); // 중복 제거
+            state.recentFiles.unshift({
+                name: name,
+                openedAt: new Date().getTime()
+            });
+            if (state.recentFiles.length > 10) state.recentFiles.pop(); // 최대 10개
+            saveRecentFiles();
+        }
+
+        // 6. PDF 파일 로딩 및 렌더링 코어
+        function loadPDF(file) {
+            elements.loadingSpinner.classList.remove('hidden');
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+                state.currentFileName = file.name;
+                
+                pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                    state.pdfDoc = pdf;
+                    state.pageNum = 1;
+                    state.numPages = pdf.numPages;
+                    state.scale = 1.0;
+                    
+                    // UI 변경
+                    elements.appTitle.textContent = file.name;
+                    elements.welcomeCard.classList.add('hidden');
+                    elements.pdfContainer.classList.remove('hidden');
+                    elements.mobileFooter.classList.remove('hidden');
+                    
+                    addRecentFile(file.name);
+                    renderBookmarks();
+                    
+                    renderPage(state.pageNum);
+                    elements.loadingSpinner.classList.add('hidden');
+                    showToast("문서가 성공적으로 로드되었습니다.");
+                }).catch(err => {
+                    console.error(err);
+                    elements.loadingSpinner.classList.add('hidden');
+                    showToast("PDF 로드 오류: 올바른 문서가 아닙니다.");
+                });
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+
+        // 페이지 렌더링 핵심
+        function renderPage(num) {
+            if (!state.pdfDoc) return;
+            elements.loadingSpinner.classList.remove('hidden');
+
+            state.pdfDoc.getPage(num).then(page => {
+                // 모바일 기기의 너비에 맞춰 뷰 최적화 배율 지정
+                const containerWidth = elements.viewer-section ? elements.viewer-section.clientWidth - 32 : window.innerWidth - 32;
+                const unscaledViewport = page.getViewport({ scale: 1 });
+                
+                // 디폴트 배율 계산 (기기 화면 가로폭에 채움)
+                const defaultScale = containerWidth / unscaledViewport.width;
+                const viewport = page.getViewport({ scale: defaultScale * state.scale });
+
+                elements.canvas.height = viewport.height;
+                elements.canvas.width = viewport.width;
+
+                const renderContext = {
+                    canvasContext: elements.ctx,
+                    viewport: viewport
+                };
+
+                page.render(renderContext).promise.then(() => {
+                    elements.loadingSpinner.classList.add('hidden');
+                    updatePageStats();
+                });
+            });
+        }
+
+        function updatePageStats() {
+            elements.currPageDisp.textContent = state.pageNum;
+            elements.totalPageDisp.textContent = state.numPages;
+            elements.footerCurrPage.textContent = state.pageNum;
+            elements.footerTotalPage.textContent = state.numPages;
+        }
+
+        function goToPage(num) {
+            if (!state.pdfDoc || num < 1 || num > state.numPages) return;
+            state.pageNum = num;
+            renderPage(state.pageNum);
+        }
+
+        // 이전 / 다음 제어
+        function prevPage() {
+            if (state.pageNum <= 1) return;
+            goToPage(state.pageNum - 1);
+        }
+
+        function nextPage() {
+            if (state.pageNum >= state.numPages) return;
+            goToPage(state.pageNum + 1);
+        }
+
+        // 7. 터치 제스처 처리 (모바일용 스와이프 및 핀치 줌)
+        const viewerSection = document.getElementById('viewer-section');
+        
+        viewerSection.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                state.touchStartX = e.touches[0].clientX;
+                state.touchStartY = e.touches[0].clientY;
+                state.isZooming = false;
+            } else if (e.touches.length === 2) {
+                // 두 손가락 터치: 핀치 줌 시작 거리 계산
+                state.isZooming = true;
+                state.pinchStartDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        }, { passive: true });
+
+        viewerSection.addEventListener('touchend', (e) => {
+            if (state.isZooming) {
+                state.isZooming = false;
+                return;
+            }
+            state.touchEndX = e.changedTouches[0].clientX;
+            state.touchEndY = e.changedTouches[0].clientY;
+            handleSwipe();
+        }, { passive: true });
+
+        viewerSection.addEventListener('touchmove', (e) => {
+            if (state.isZooming && e.touches.length === 2) {
+                const currentDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                const zoomFactor = currentDist / state.pinchStartDist;
+                
+                if (zoomFactor > 1.1) {
+                    zoomIn();
+                    state.pinchStartDist = currentDist; // 거리 업데이트
+                } else if (zoomFactor < 0.9) {
+                    zoomOut();
+                    state.pinchStartDist = currentDist;
+                }
+            }
+        }, { passive: true });
+
+        function handleSwipe() {
+            const diffX = state.touchEndX - state.touchStartX;
+            const diffY = state.touchEndY - state.touchStartY;
+
+            // X축 이동량이 Y축보다 많고 수평이 충분히 길 때 페이지 전환
+            if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 60) {
+                if (diffX > 0) {
+                    prevPage(); // 오른쪽 스와이프 -> 이전
+                } else {
+                    nextPage(); // 왼쪽 스와이프 -> 다음
+                }
+            }
+        }
+
+        // 줌 인/아웃 핸들러
+        function zoomIn() {
+            if (state.scale >= 3.0) return;
+            state.scale += 0.2;
+            renderPage(state.pageNum);
+        }
+
+        function zoomOut() {
+            if (state.scale <= 0.6) return;
+            state.scale -= 0.2;
+            renderPage(state.pageNum);
+        }
+
+        // 더블탭 시 원래 크기로 초기화 기능 추가
+        let lastTap = 0;
+        viewerSection.addEventListener('click', (e) => {
+            const currentTime = new Date().getTime();
+            const tapLength = currentTime - lastTap;
+            if (tapLength < 300 && tapLength > 0) {
+                state.scale = 1.0;
+                renderPage(state.pageNum);
+                showToast("확대 배율이 초기화되었습니다.");
+            }
+            lastTap = currentTime;
+        });
+
+        // 8. 사이드바 컨트롤 및 탭 전환
+        function toggleSidebar(show) {
+            if (show) {
+                elements.sidebar.classList.remove('-translate-x-full');
+                elements.sidebarOverlay.classList.remove('hidden');
+            } else {
+                elements.sidebar.classList.add('-translate-x-full');
+                elements.sidebarOverlay.classList.add('hidden');
+            }
+        }
+
+        elements.menuBtn.addEventListener('click', () => toggleSidebar(true));
+        elements.closeSidebarBtn.addEventListener('click', () => toggleSidebar(false));
+        elements.sidebarOverlay.addEventListener('click', () => toggleSidebar(false));
+
+        elements.tabRecent.addEventListener('click', () => {
+            elements.tabRecent.className = "flex-1 py-2.5 text-center font-semibold border-b-2 border-primary-500 text-primary-500";
+            elements.tabBookmarks.className = "flex-1 py-2.5 text-center font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200";
+            elements.recentListContainer.classList.remove('hidden');
+            elements.bookmarksContainer.classList.add('hidden');
+        });
+
+        elements.tabBookmarks.addEventListener('click', () => {
+            elements.tabBookmarks.className = "flex-1 py-2.5 text-center font-semibold border-b-2 border-primary-500 text-primary-500";
+            elements.tabRecent.className = "flex-1 py-2.5 text-center font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200";
+            elements.bookmarksContainer.classList.remove('hidden');
+            elements.recentListContainer.classList.add('hidden');
+        });
+
+        // 9. 텍스트 검색 기능 (HTML 수준의 인라인 하이라이트)
+        elements.toggleSearchBtn.addEventListener('click', () => {
+            elements.searchBar.classList.toggle('hidden');
+            if (!elements.searchBar.classList.contains('hidden')) {
+                elements.searchInput.focus();
+            }
+        });
+
+        // 10. 파일 업로드 및 이벤트 연결
+        elements.fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                loadPDF(e.target.files[0]);
+            }
+        });
+
+        elements.welcomeFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                loadPDF(e.target.files[0]);
+            }
+        });
+
+        elements.prevBtn.addEventListener('click', prevPage);
+        elements.nextBtn.addEventListener('click', nextPage);
+        elements.footerPrevBtn.addEventListener('click', prevPage);
+        elements.footerNextBtn.addEventListener('click', nextPage);
+        elements.zoomInBtn.addEventListener('click', zoomIn);
+        elements.zoomOutBtn.addEventListener('click', zoomOut);
+
+        // 키보드 방향키 조작 (태블릿이나 블루투스 연결 단말기용)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') prevPage();
+            if (e.key === 'ArrowRight') nextPage();
+        });
+
+        // 초기화 실행
+        window.onload = function() {
+            initTheme();
+            loadStorageData();
+            registerServiceWorker();
+        }
+
+        // 11. PWA 설정: 서비스 워커 등록
+        let deferredPrompt;
+        const installBanner = document.getElementById('pwa-install-banner');
+        const installBtn = document.getElementById('pwa-install-btn');
+        const closeBanner = document.getElementById('pwa-close-banner');
+
+        function registerServiceWorker() {
+            if ('serviceWorker' in navigator) {
+                // 동적으로 인라인 서비스 워커를 등록할 수 있게 가상 Blob 생성
+                const swCode = `
+                    const CACHE_NAME = 'pdf-reader-cache-v1';
+                    const ASSETS = [
+                        '${window.location.href}',
+                        'https://cdn.tailwindcss.com',
+                        'https://unpkg.com/lucide@latest',
+                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+                    ];
+
+                    self.addEventListener('install', event => {
+                        event.waitUntil(
+                            caches.open(CACHE_NAME).then(cache => {
+                                return cache.addAll(ASSETS);
+                            })
+                        );
+                    });
+
+                    self.addEventListener('fetch', event => {
+                        event.respondWith(
+                            caches.match(event.request).then(response => {
+                                return response || fetch(event.request);
+                            })
+                        );
+                    });
+                `;
+
+                const blob = new Blob([swCode], { type: 'application/javascript' });
+                const swUrl = URL.createObjectURL(blob);
+
+                navigator.serviceWorker.register(swUrl)
+                    .then(reg => console.log('Service Worker 등록 완료:', reg.scope))
+                    .catch(err => console.log('Service Worker 등록 실패:', err));
+            }
+        }
+
+        // PWA 설치 배너 감지
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBanner.classList.remove('hidden');
+        });
+
+        installBtn.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    console.log('사용자가 PWA 설치를 승인했습니다.');
+                    installBanner.classList.add('hidden');
+                }
+                deferredPrompt = null;
+            }
+        });
+
+        closeBanner.addEventListener('click', () => {
+            installBanner.classList.add('hidden');
+        });
+    </script>
+</body>
+</html>
